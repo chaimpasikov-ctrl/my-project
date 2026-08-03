@@ -7,11 +7,33 @@ import pandas as pd
 from app.config.settings import SHOES_CSV
 
 
-def get_shoe_category(pronation_label: str) -> str:
-    """Map a pronation label to a high-level shoe category."""
-    if "overpronation" in pronation_label:
+LABEL_TO_CATEGORY = {
+    "neutral_alignment": "neutral",
+    "mild_pronation": "supportive_neutral",
+    "moderate_pronation": "stability",
+    # NOTE: motion-control reserved for severe + medial injury history
+    # (see future multi-factor recommender).
+    "marked_pronation": "stability",
+    "mild_supination": "neutral",
+    "moderate_supination": "cushioned",
+    "marked_supination": "cushioned",
+    "insufficient_data": "neutral",
+}
+
+
+def get_shoe_category(label: str) -> str:
+    """Map a rearfoot-eversion label to a high-level shoe category.
+
+    Note: this is the MVP, single-axis mapping. The roadmap calls for a
+    multi-factor scorer (body weight, mileage, foot strike, injury history,
+    comfort preference, drop), where this label is just one input among many.
+    """
+    if label in LABEL_TO_CATEGORY:
+        return LABEL_TO_CATEGORY[label]
+    # Backward compatibility with previous label schemes.
+    if "overpronation" in label or "medial_collapse" in label:
         return "stability"
-    if "underpronation" in pronation_label:
+    if "underpronation" in label or "lateral_offset" in label or "supination" in label:
         return "cushioned"
     return "neutral"
 

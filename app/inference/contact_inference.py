@@ -1,13 +1,14 @@
 from typing import Optional, Tuple
 
-from app.inference.roboflow_client import infer_image, extract_best_prediction
+from app.inference.roboflow_client import infer_workflow, extract_best_prediction
 
 
 def infer_contact(
     image_path: str,
-    model_id: str,
+    workspace_name: str,
+    workflow_id: str,
 ) -> Tuple[Optional[str], float, dict]:
-    result = infer_image(image_path, model_id=model_id)
+    result = infer_workflow(image_path, workspace_name=workspace_name, workflow_id=workflow_id)
     pred = extract_best_prediction(result)
 
     if pred is None:

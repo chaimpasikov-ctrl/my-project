@@ -7,9 +7,13 @@ the same regardless of the current working directory.
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 # Resolves to the directory that contains the `app/` package
 # (this file is at app/config/settings.py -> parents[2] is project root).
 PROJECT_ROOT: Path = Path(__file__).resolve().parents[2]
+
+load_dotenv(PROJECT_ROOT / ".env")
 
 # =========================
 # Roboflow
@@ -20,8 +24,14 @@ if not ROBOFLOW_API_KEY:
         "ROBOFLOW_API_KEY environment variable is not set. "
         "Create a .env file or export it before running."
     )
-KEYPOINT_MODEL_ID = "secondtry-bt4cj/4"
-CONTACT_MODEL_ID = "contact-nocontact/2"
+# Both the contact/no-contact classifier and the keypoint detector run as
+# Roboflow Workflows (rather than direct model calls) so each can chain its
+# base model with the workflow's post-processing logic.
+ROBOFLOW_WORKSPACE_NAME = "chaims-workspace"
+CONTACT_WORKFLOW_ID = "contact-nocontact-vcontact-nocontact-3-resnet18-t1-logic"
+# rf-detr keypoint model; outputs 6 keypoints per runner detection, in order:
+# left_knee, left_ankle, right_knee, right_ankle, left_heel, right_heel.
+KEYPOINT_WORKFLOW_ID = "secondtry-vsecondtry-bt4cj-5-rfdetr-keypoint-preview-t1-logic"
 
 # =========================
 # Filesystem

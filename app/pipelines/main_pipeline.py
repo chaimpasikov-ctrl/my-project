@@ -12,18 +12,17 @@ import numpy as np
 from app.analysis.analyze_pronation import analyze_pronation
 from app.config.settings import (
     CONTACT_CONF_THRESHOLD,
-    CONTACT_MODEL_ID,
+    CONTACT_WORKFLOW_ID,
     FRAME_STRIDE,
-    KEYPOINT_MODEL_ID,
+    KEYPOINT_WORKFLOW_ID,
     OUTPUT_ROOT,
+    ROBOFLOW_WORKSPACE_NAME,
 )
 from app.inference.contact_inference import infer_contact
-from app.inference.roboflow_client import extract_runner_prediction, infer_image
+from app.inference.roboflow_client import extract_runner_prediction, infer_workflow
 
 
-# Indices of the six keypoints in the Roboflow keypoint model output
-# (secondtry-bt4cj/4). Indices 0..3 are unchanged from the previous 4-kp
-# model; heels were added at the end.
+# Indices of the six keypoints in the rf-detr keypoint workflow output.
 LEFT_KNEE = 0
 LEFT_ANKLE = 1
 RIGHT_KNEE = 2
@@ -226,8 +225,9 @@ def run_pipeline(
     video_path: Union[str, Path],
     output_root: Union[str, Path] = OUTPUT_ROOT,
     frame_stride: int = FRAME_STRIDE,
-    contact_model_id: str = CONTACT_MODEL_ID,
-    keypoint_model_id: str = KEYPOINT_MODEL_ID,
+    workspace_name: str = ROBOFLOW_WORKSPACE_NAME,
+    contact_workflow_id: str = CONTACT_WORKFLOW_ID,
+    keypoint_workflow_id: str = KEYPOINT_WORKFLOW_ID,
     contact_conf_threshold: float = CONTACT_CONF_THRESHOLD,
 ) -> Optional[Dict[str, Any]]:
     """Process a rear-view running video and return the pronation analysis dict.
@@ -265,8 +265,8 @@ def run_pipeline(
     analyzed_count = 0
 
     print(f"Processing video: {video_path} (fps={fps:.2f}, frames={total_frames})")
-    print(f"Contact model: {contact_model_id}")
-    print(f"Keypoint model: {keypoint_model_id}")
+    print(f"Contact workflow: {workspace_name}/{contact_workflow_id}")
+    print(f"Keypoint workflow: {workspace_name}/{keypoint_workflow_id}")
 
     try:
         while True:
@@ -289,7 +289,8 @@ def run_pipeline(
             try:
                 contact_label, contact_conf, _ = infer_contact(
                     str(sampled_frame_path),
-                    model_id=contact_model_id,
+                    workspace_name=workspace_name,
+                    workflow_id=contact_workflow_id,
                 )
             except Exception as e:
                 print(f"[WARN] Contact inference failed on frame {frame_idx}: {e}")
@@ -332,7 +333,11 @@ def run_pipeline(
             # Phase 2: Keypoint inference
             # ----------------------------
             try:
-                result = infer_image(str(contact_frame_path), model_id=keypoint_model_id)
+                result = infer_workflow(
+                    str(contact_frame_path),
+                    workspace_name=workspace_name,
+                    workflow_id=keypoint_workflow_id,
+                )
                 pred = extract_runner_prediction(result)
             except Exception as e:
                 print(f"[WARN] Keypoint inference failed on frame {frame_idx}: {e}")

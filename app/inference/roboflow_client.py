@@ -15,20 +15,29 @@ CLIENT = InferenceHTTPClient(
 
 
 # ----------------------------
-# Run inference on an image
+# Run a Roboflow workflow on an image
 # ----------------------------
-def infer_image(image_path: str, model_id: str) -> Dict[str, Any]:
+def infer_workflow(image_path: str, workspace_name: str, workflow_id: str) -> Dict[str, Any]:
     """
-    Runs Roboflow inference on an image.
+    Runs a Roboflow Workflow on an image.
 
     Args:
         image_path: Path to image file
-        model_id: Roboflow model ID (e.g. "secondtry-bt4cj/3")
+        workspace_name: Roboflow workspace containing the workflow
+        workflow_id: Roboflow workflow ID
 
     Returns:
-        Raw inference result dictionary
+        The workflow's prediction block, in ``{"predictions": [...], ...}``
+        shape, so callers like ``extract_best_prediction`` don't need to
+        care which workflow produced it.
     """
-    return CLIENT.infer(image_path, model_id=model_id)
+    result = CLIENT.run_workflow(
+        workspace_name=workspace_name,
+        workflow_id=workflow_id,
+        images={"image": image_path},
+        use_cache=True,
+    )
+    return result[0]["predictions"]
 
 
 # ----------------------------

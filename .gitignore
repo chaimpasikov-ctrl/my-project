@@ -24,3 +24,8 @@ analysis_results/
 # Local env / secrets
 .env
 .env.local
+
+# Claude Code local settings
+.claude/settings.local.json
+.claude/skills/
+.agents/

@@ -28,10 +28,10 @@ if not ROBOFLOW_API_KEY:
 # Roboflow Workflows (rather than direct model calls) so each can chain its
 # base model with the workflow's post-processing logic.
 ROBOFLOW_WORKSPACE_NAME = "chaims-workspace"
-CONTACT_WORKFLOW_ID = "contact-nocontact-vcontact-nocontact-3-resnet18-t1-logic"
+CONTACT_WORKFLOW_ID = "contact-nocontact-vcontact-nocontact-4-resnet50-t2-logic"
 # rf-detr keypoint model; outputs 6 keypoints per runner detection, in order:
 # left_knee, left_ankle, right_knee, right_ankle, left_heel, right_heel.
-KEYPOINT_WORKFLOW_ID = "secondtry-vsecondtry-bt4cj-5-rfdetr-keypoint-preview-t1-logic"
+KEYPOINT_WORKFLOW_ID = "secondtry-vsecondtry-bt4cj-6-rfdetr-keypoint-preview-t1-logic"
 
 # =========================
 # Filesystem

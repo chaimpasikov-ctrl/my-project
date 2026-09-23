@@ -1,39 +1,45 @@
-"""Standalone batch evaluator: multiple videos in → mean pixel error report out.
+"""Standalone batch evaluator: stance-leg keypoint accuracy on unseen videos.
 
-Runs the analysis pipeline on every video in a folder (or a single video),
-opens a click-based annotator for ground-truth keypoints, and prints a
-report of mean pixel error per keypoint, per video, and overall.
+Runs the analysis pipeline on every video in a folder (or one video),
+then for each rendered frame you:
+  - press L if the LEFT leg is in stance (foot on ground)
+  - press R if the RIGHT leg is in stance
+  - press N if the classifier was wrong and no foot is really planted
 
-Also tracks contact classifier false positives: press 'n' to mark a
-frame as "not a real contact frame" — those frames are excluded from
-the keypoint accuracy report and counted as classifier errors instead.
+After L/R you click 3 keypoints for that leg only: knee, ankle, heel.
+
+This produces:
+  - stance-leg keypoint accuracy (mean pixel error), broken down by keypoint
+  - a contact classifier false-positive rate
 
 Usage:
     # Process every video in scripts/test_videos/
     python scripts/evaluate_on_video.py
 
-    # Process a specific folder
+    # Specific folder / video
     python scripts/evaluate_on_video.py --videos-dir path/to/videos
-
-    # Single video (backward compatible)
     python scripts/evaluate_on_video.py --video path/to/one.mp4
 
-    # Report-only (recompute from saved clicks, no annotator)
+    # Report-only (no pipeline, no clicks — just recompute from prior data)
     python scripts/evaluate_on_video.py --report-only
 
-    # Re-annotate everything
+    # Re-do every frame
     python scripts/evaluate_on_video.py --redo
 
     # Cap frames per video (default: 30)
     python scripts/evaluate_on_video.py --max-frames-per-video 20
 
-Controls while annotating:
-    left-click      place the next keypoint
-    u               undo the last click
-    space / enter   confirm the 6 points and move to the next frame
-    n               mark frame as "not a real contact" (classifier error)
-    s               skip this frame (excluded from any report)
-    q               quit and save progress so far (moves to next video)
+Controls while annotating each frame:
+    L               left leg is stance leg    -> click 3 points
+    R               right leg is stance leg   -> click 3 points
+    N               not a real contact frame  -> counted as classifier error
+    S               skip (excluded from report)
+    Q               quit and save progress
+While placing the 3 clicks:
+    left-click      place next point (knee, then ankle, then heel)
+    U               undo the last click
+    space / enter   confirm the 3 points
+    B               back — change your mind about which leg (or reject)
 """
 
 import argparse
@@ -56,8 +62,6 @@ from scripts.evaluate_keypoints import (  # noqa: E402
     KEYPOINT_NAMES,
     POINT_COLORS,
     SHANK_COLUMN_FOR_KEYPOINT,
-    load_annotations,
-    save_annotations,
     load_predictions,
     list_rendered_images,
 )
@@ -65,12 +69,20 @@ from scripts.evaluate_keypoints import (  # noqa: E402
 from app.config.settings import OUTPUT_ROOT  # noqa: E402
 
 
-# Video extensions we'll recognize in a folder
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".webm"}
-
-# Default videos folder — sits next to this script
 DEFAULT_VIDEOS_DIR = Path(__file__).resolve().parent / "test_videos"
 
+# Per-leg keypoint order used inside this script.
+# When the user picks LEFT, they click these three global-KEYPOINT_NAMES
+# indices, in this order.
+KEYPOINT_INDEX_BY_LEG = {
+    "left":  [0, 1, 4],   # left_knee, left_ankle, left_heel
+    "right": [2, 3, 5],   # right_knee, right_ankle, right_heel
+}
+LEG_STEP_LABELS = ["knee", "ankle", "heel"]
 
 Point = Tuple[float, float]
 
@@ -79,11 +91,6 @@ Point = Tuple[float, float]
 # Pipeline invocation
 # ---------------------------------------------------------------------------
 def run_pipeline_on_video(video_path: Path) -> Path:
-    """Run the analysis pipeline on the given video, return the session dir.
-
-    Adjust the import + call below if your pipeline's entry function has a
-    different name or signature.
-    """
     try:
         from app.pipelines.main_pipeline import process_video
         session_dir = process_video(str(video_path))
@@ -94,13 +101,9 @@ def run_pipeline_on_video(video_path: Path) -> Path:
         except ImportError as e:
             raise RuntimeError(
                 "Could not import a pipeline entry point from "
-                "app.pipelines.main_pipeline. Edit run_pipeline_on_video() "
-                "in this script to call your actual function."
+                "app.pipelines.main_pipeline."
             ) from e
 
-    # process_video may return a Path, a str, a dict of results, or None.
-    # In all "no clear path" cases, fall back to the newest session dir on
-    # disk — we know the pipeline just wrote one because it just ran.
     if not isinstance(session_dir, (str, Path)):
         candidates = [
             p for p in OUTPUT_ROOT.iterdir()
@@ -108,100 +111,165 @@ def run_pipeline_on_video(video_path: Path) -> Path:
         ]
         if not candidates:
             raise RuntimeError(
-                "Pipeline finished but no session directory was found under "
-                f"{OUTPUT_ROOT}. Cannot continue."
+                "Pipeline finished but no session directory was found."
             )
         session_dir = max(candidates, key=lambda p: p.stat().st_mtime)
 
     return Path(session_dir)
 
 
-# ---------------------------------------------------------------------------
-# Click UI — this replaces the imported annotate_image so we can add 'n' key
-# ---------------------------------------------------------------------------
-def annotate_image_with_reject(
-    image_path: Path,
-) -> Tuple[Optional[List[Point]], bool, bool]:
-    """Show one frame; collect ground-truth clicks or reject as non-contact.
 
-    Returns (points, quit_requested, rejected_as_non_contact):
-        - points is a list of 6 (x, y) tuples if the frame was annotated
-        - points is None if the frame was skipped OR rejected OR quit
-        - rejected_as_non_contact is True iff the user pressed 'n'
+def load_frame_records(path: Path) -> Dict[str, dict]:
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text())
+        if not isinstance(raw, dict):
+            return {}
+        return raw
+    except Exception:
+        return {}
+
+
+def save_frame_records(path: Path, records: Dict[str, dict]) -> None:
+    path.write_text(json.dumps(records, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Click UI
+# ---------------------------------------------------------------------------
+def _put_header(img, top_text, bottom_text):
+    cv2.putText(img, top_text, (10, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2,
+                cv2.LINE_AA)
+    cv2.putText(img, bottom_text, (10, img.shape[0] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
+                cv2.LINE_AA)
+
+
+def annotate_one_frame(image_path: Path) -> Tuple[Optional[dict], bool]:
+    """Annotate a single frame with the L/R/N flow.
+
+    Returns (record, quit_requested):
+        record is one of:
+          {"kind": "annotated", "stance_leg": "left"|"right",
+           "points": [[x,y],[x,y],[x,y]]}
+          {"kind": "rejected"}
+          {"kind": "skipped"}
+          None  -> caller should skip saving (frame not touched, quit fired)
     """
     img = cv2.imread(str(image_path))
     if img is None:
         print(f"[WARN] Could not read image: {image_path}")
-        return None, False, False
+        return None, False
 
-    clicks: List[Point] = []
-    window = "Keypoint ground-truth annotator"
+    window = "Evaluate stance leg"
     cv2.namedWindow(window)
 
-    def on_mouse(event, x, y, flags, userdata):
-        if event == cv2.EVENT_LBUTTONDOWN and len(clicks) < len(KEYPOINT_NAMES):
-            clicks.append((float(x), float(y)))
+    while True:
+        # ---- Phase 1: choose leg (or reject/skip/quit) -----------------
+        chosen_leg: Optional[str] = None
+        while chosen_leg is None:
+            display = img.copy()
+            _put_header(
+                display,
+                "L=left leg  R=right leg  N=not-a-real-contact",
+                "[s]kip  [q]uit & save",
+            )
+            cv2.imshow(window, display)
+            key = cv2.waitKey(20) & 0xFF
+            if key == ord("l"):
+                chosen_leg = "left"
+            elif key == ord("r"):
+                chosen_leg = "right"
+            elif key == ord("n"):
+                cv2.destroyWindow(window)
+                return {"kind": "rejected"}, False
+            elif key == ord("s"):
+                cv2.destroyWindow(window)
+                return {"kind": "skipped"}, False
+            elif key == ord("q"):
+                cv2.destroyWindow(window)
+                return None, True
 
-    cv2.setMouseCallback(window, on_mouse)
+        # ---- Phase 2: click 3 points for the chosen leg ----------------
+        clicks: List[Point] = []
 
-    try:
+        def on_mouse(event, x, y, flags, userdata):
+            if event == cv2.EVENT_LBUTTONDOWN and len(clicks) < 3:
+                clicks.append((float(x), float(y)))
+
+        cv2.setMouseCallback(window, on_mouse)
+
+        went_back = False
         while True:
             display = img.copy()
             for i, pt in enumerate(clicks):
-                color = POINT_COLORS[i % len(POINT_COLORS)]
+                color = POINT_COLORS[
+                    KEYPOINT_INDEX_BY_LEG[chosen_leg][i] % len(POINT_COLORS)
+                ]
                 cv2.circle(display, (int(pt[0]), int(pt[1])), 5, color, -1)
                 cv2.putText(
-                    display, KEYPOINT_NAMES[i],
+                    display, LEG_STEP_LABELS[i],
                     (int(pt[0]) + 8, int(pt[1]) - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA,
                 )
 
-            if len(clicks) < len(KEYPOINT_NAMES):
-                prompt = (
-                    f"Click: {KEYPOINT_NAMES[len(clicks)]} "
-                    f"({len(clicks) + 1}/{len(KEYPOINT_NAMES)})"
+            if len(clicks) < 3:
+                top = (
+                    f"[{chosen_leg.upper()}]  Click: "
+                    f"{LEG_STEP_LABELS[len(clicks)]} ({len(clicks) + 1}/3)"
                 )
             else:
-                prompt = "All 6 placed - press SPACE/ENTER to confirm, u to undo"
-            cv2.putText(display, prompt, (10, 25),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2,
-                        cv2.LINE_AA)
-            cv2.putText(
-                display,
-                "[u]ndo  [n]ot a real contact  [s]kip  [q]uit & save",
-                (10, display.shape[0] - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1,
-                cv2.LINE_AA,
+                top = (
+                    f"[{chosen_leg.upper()}]  3/3 placed - "
+                    f"SPACE/ENTER to confirm"
+                )
+            _put_header(
+                display, top,
+                "[u]ndo  [b]ack (change leg)  [s]kip  [q]uit & save",
             )
-
             cv2.imshow(window, display)
             key = cv2.waitKey(20) & 0xFF
 
             if key == ord("q"):
-                return None, True, False
+                cv2.destroyWindow(window)
+                return None, True
             if key == ord("s"):
-                return None, False, False
-            if key == ord("n"):
-                return None, False, True
+                cv2.destroyWindow(window)
+                return {"kind": "skipped"}, False
+            if key == ord("b"):
+                # go back to leg selection for this frame
+                went_back = True
+                break
             if key == ord("u") and clicks:
                 clicks.pop()
-            if len(clicks) == len(KEYPOINT_NAMES) and key in (13, 32):
-                return clicks, False, False
-    finally:
-        cv2.destroyWindow(window)
+            if len(clicks) == 3 and key in (13, 32):
+                cv2.destroyWindow(window)
+                return {
+                    "kind": "annotated",
+                    "stance_leg": chosen_leg,
+                    "points": [list(p) for p in clicks],
+                }, False
+
+        if went_back:
+            # loop back to phase 1
+            continue
 
 
-def run_annotation_session_with_reject(
+# ---------------------------------------------------------------------------
+# Session-level annotator
+# ---------------------------------------------------------------------------
+def run_annotation_session(
     images: List[Path],
-    annotations: Dict[str, List[Optional[Point]]],
-    rejections: Dict[str, bool],
-    annotations_path: Path,
-    rejections_path: Path,
+    records: Dict[str, dict],
+    records_path: Path,
     redo: bool,
 ) -> None:
-    """Annotate a batch of frames; support rejecting as non-contact."""
     def already_seen(name: str) -> bool:
-        return name in annotations or name in rejections
+        return name in records and records[name].get("kind") in (
+            "annotated", "rejected"
+        )
 
     todo = [img for img in images if redo or not already_seen(img.name)]
     if not todo:
@@ -211,29 +279,27 @@ def run_annotation_session_with_reject(
         return
 
     print(
-        f"Annotating {len(todo)} frame(s). "
-        f"Click 6 points, SPACE/ENTER confirm, "
-        f"u undo, n not-a-contact, s skip, q quit & save.\n"
+        f"Reviewing {len(todo)} frame(s). "
+        f"Press L/R to pick the stance leg, N to reject as false contact, "
+        f"S skip, Q quit & save.\n"
     )
 
     for i, image_path in enumerate(todo, start=1):
         print(f"[{i}/{len(todo)}] {image_path.name}")
-        points, quit_now, rejected = annotate_image_with_reject(image_path)
-
-        if rejected:
-            rejections[image_path.name] = True
-            # If we previously accepted this frame, drop the annotation.
-            annotations.pop(image_path.name, None)
-            save_annotations(annotations_path, annotations)
-            _save_rejections(rejections_path, rejections)
-            print("  -> flagged as not-a-real-contact (classifier false positive)")
-        elif points is not None:
-            annotations[image_path.name] = points
-            # If we previously rejected, drop the rejection.
-            rejections.pop(image_path.name, None)
-            save_annotations(annotations_path, annotations)
-            _save_rejections(rejections_path, rejections)
-
+        record, quit_now = annotate_one_frame(image_path)
+        if record is not None:
+            records[image_path.name] = record
+            save_frame_records(records_path, records)
+            kind = record["kind"]
+            if kind == "annotated":
+                print(
+                    f"  -> {record['stance_leg']} leg, "
+                    f"knee/ankle/heel placed"
+                )
+            elif kind == "rejected":
+                print("  -> not-a-real-contact (classifier false positive)")
+            elif kind == "skipped":
+                print("  -> skipped")
         if quit_now:
             print("\nQuit requested - progress saved.")
             break
@@ -242,21 +308,7 @@ def run_annotation_session_with_reject(
 
 
 # ---------------------------------------------------------------------------
-# Rejections persistence — a simple JSON file next to annotations
-# ---------------------------------------------------------------------------
-def _load_rejections(path: Path) -> Dict[str, bool]:
-    if not path.is_file():
-        return {}
-    raw = json.loads(path.read_text())
-    return {k: bool(v) for k, v in raw.items() if v}
-
-
-def _save_rejections(path: Path, rejections: Dict[str, bool]) -> None:
-    path.write_text(json.dumps(rejections, indent=2))
-
-
-# ---------------------------------------------------------------------------
-# Video discovery
+# Video discovery / training-set check / session lookup
 # ---------------------------------------------------------------------------
 def collect_videos(
     videos_dir: Optional[Path], single_video: Optional[Path]
@@ -285,16 +337,12 @@ def collect_videos(
     return videos
 
 
-# ---------------------------------------------------------------------------
-# Training-set check
-# ---------------------------------------------------------------------------
 def check_training_set(video_paths: List[Path]) -> List[Path]:
     training_list = REPO_ROOT / "data" / "training_video_names.txt"
     if not training_list.is_file():
         print(
             "\nNOTE: Cannot automatically verify these videos weren't in "
-            "training. Confirm you're using unseen videos for the numbers "
-            "to be defensible.\n"
+            "training. Confirm you're using unseen videos.\n"
         )
         return video_paths
 
@@ -315,17 +363,9 @@ def check_training_set(video_paths: List[Path]) -> List[Path]:
     ).strip().lower()
     if answer in ("", "y", "yes"):
         return [v for v in video_paths if v not in suspect]
-    else:
-        print(
-            "Continuing with ALL videos including training-set ones. "
-            "Numbers will not be defensible."
-        )
-        return video_paths
+    return video_paths
 
 
-# ---------------------------------------------------------------------------
-# Session lookup for --report-only
-# ---------------------------------------------------------------------------
 def find_session_for_video(video_path: Path) -> Optional[Path]:
     if not OUTPUT_ROOT.is_dir():
         return None
@@ -342,56 +382,76 @@ def find_session_for_video(video_path: Path) -> Optional[Path]:
 
 
 # ---------------------------------------------------------------------------
-# Report — mean pixel error only + classifier false-positive rate
+# Report — stance-leg keypoint accuracy + classifier FP rate
 # ---------------------------------------------------------------------------
-def compute_mean_report(
-    annotations: Dict[str, list],
-    rejections: Dict[str, bool],
+def compute_report(
+    records: Dict[str, dict],
     predictions: Dict[str, dict],
     total_frames_reviewed: int,
 ) -> dict:
-    """Compute per-keypoint mean pixel error + contact classifier stats."""
-    per_kp: Dict[str, dict] = {
-        name: {"errors": [], "norm_errors": []} for name in KEYPOINT_NAMES
+    # Only 3 keypoints per record. We report per-role: knee / ankle / heel.
+    per_role: Dict[str, dict] = {
+        role: {"errors": [], "norm_errors": []} for role in LEG_STEP_LABELS
     }
+    # Also track per-leg counts so we can report imbalance.
+    leg_counts = {"left": 0, "right": 0}
 
-    for fname, gt_points in annotations.items():
+    n_annotated = 0
+    n_rejected = 0
+
+    for fname, rec in records.items():
+        kind = rec.get("kind")
+        if kind == "rejected":
+            n_rejected += 1
+            continue
+        if kind != "annotated":
+            continue
+
+        n_annotated += 1
+        stance_leg = rec["stance_leg"]
+        gt_points = rec["points"]  # [knee, ankle, heel]
+        leg_counts[stance_leg] += 1
+
         pred_entry = predictions.get(fname)
         if pred_entry is None:
             continue
         pred_points = pred_entry["points"]
         shank = pred_entry["shank"]
 
-        for i, name in enumerate(KEYPOINT_NAMES):
-            gt = gt_points[i] if i < len(gt_points) else None
-            pred = pred_points[i] if i < len(pred_points) else None
-            if gt is None or pred is None:
-                continue
+        keypoint_indices = KEYPOINT_INDEX_BY_LEG[stance_leg]
 
+        for role_i, kp_i in enumerate(keypoint_indices):
+            gt = tuple(gt_points[role_i])
+            pred = (
+                pred_points[kp_i]
+                if kp_i < len(pred_points) else None
+            )
+            if pred is None:
+                continue
             dx = pred[0] - gt[0]
             dy = pred[1] - gt[1]
             eucl_err = (dx * dx + dy * dy) ** 0.5
-            per_kp[name]["errors"].append(eucl_err)
 
-            shank_px = shank.get(SHANK_COLUMN_FOR_KEYPOINT[i])
+            role = LEG_STEP_LABELS[role_i]
+            per_role[role]["errors"].append(eucl_err)
+
+            shank_col = SHANK_COLUMN_FOR_KEYPOINT[kp_i]
+            shank_px = shank.get(shank_col)
             if shank_px:
-                per_kp[name]["norm_errors"].append(eucl_err / shank_px)
+                per_role[role]["norm_errors"].append(eucl_err / shank_px)
 
-    keypoint_stats: Dict[str, dict] = {}
+    role_stats: Dict[str, dict] = {}
     all_errors: List[float] = []
     all_norm_errors: List[float] = []
-
-    for name, data in per_kp.items():
+    for role, data in per_role.items():
         errors = data["errors"]
         norm_errors = data["norm_errors"]
         all_errors.extend(errors)
         all_norm_errors.extend(norm_errors)
-
         if not errors:
-            keypoint_stats[name] = {"n": 0}
+            role_stats[role] = {"n": 0}
             continue
-
-        keypoint_stats[name] = {
+        role_stats[role] = {
             "n": len(errors),
             "mean_px": statistics.mean(errors),
             "mean_norm_pct": (
@@ -403,79 +463,70 @@ def compute_mean_report(
     if all_errors:
         overall["mean_px"] = statistics.mean(all_errors)
         overall["mean_norm_pct"] = (
-            statistics.mean(all_norm_errors) * 100 if all_norm_errors else None
+            statistics.mean(all_norm_errors) * 100
+            if all_norm_errors else None
         )
 
-    # Contact classifier false-positive stats
-    # (all frames handed to the annotator were labelled "contact" by the
-    # classifier; the user marked some of them as not-really-contact)
-    n_rejected = sum(1 for v in rejections.values() if v)
-    n_accepted = len(annotations)
-    contact_reviewed = n_accepted + n_rejected
-    fp_rate = (n_rejected / contact_reviewed) if contact_reviewed > 0 else None
+    contact_reviewed = n_annotated + n_rejected
+    fp_rate = (
+        n_rejected / contact_reviewed if contact_reviewed > 0 else None
+    )
 
     return {
         "n_frames_reviewed": total_frames_reviewed,
-        "n_frames_annotated": n_accepted,
+        "n_frames_annotated": n_annotated,
         "n_frames_rejected_non_contact": n_rejected,
-        "n_frames_with_predictions": sum(
-            1 for f in annotations if f in predictions
-        ),
+        "leg_counts": leg_counts,
         "contact_classifier": {
             "n_reviewed": contact_reviewed,
             "n_false_positive": n_rejected,
             "false_positive_rate": fp_rate,
         },
         "overall": overall,
-        "per_keypoint": keypoint_stats,
+        "per_role": role_stats,
     }
 
 
-def combine_reports(per_video_reports: List[Tuple[Path, dict]]) -> dict:
-    """Aggregate per-video reports into one report across all videos."""
-    per_kp: Dict[str, List[Tuple[float, int]]] = {
-        name: [] for name in KEYPOINT_NAMES
+def combine_reports(per_video: List[Tuple[Path, dict]]) -> dict:
+    per_role: Dict[str, List[Tuple[float, int]]] = {
+        r: [] for r in LEG_STEP_LABELS
     }
-    per_kp_norm: Dict[str, List[Tuple[float, int]]] = {
-        name: [] for name in KEYPOINT_NAMES
+    per_role_norm: Dict[str, List[Tuple[float, int]]] = {
+        r: [] for r in LEG_STEP_LABELS
     }
+    total_reviewed = 0
+    total_annotated = 0
+    total_rejected = 0
+    leg_counts = {"left": 0, "right": 0}
 
-    total_frames_reviewed = 0
-    total_frames_annotated = 0
-    total_frames_rejected = 0
-    total_frames_with_predictions = 0
+    for _, r in per_video:
+        total_reviewed += r.get("n_frames_reviewed", 0)
+        total_annotated += r["n_frames_annotated"]
+        total_rejected += r.get("n_frames_rejected_non_contact", 0)
+        for leg in leg_counts:
+            leg_counts[leg] += r.get("leg_counts", {}).get(leg, 0)
 
-    for _, r in per_video_reports:
-        total_frames_reviewed += r.get("n_frames_reviewed", 0)
-        total_frames_annotated += r["n_frames_annotated"]
-        total_frames_rejected += r.get("n_frames_rejected_non_contact", 0)
-        total_frames_with_predictions += r["n_frames_with_predictions"]
-
-        for name, stats in r["per_keypoint"].items():
+        for role, stats in r["per_role"].items():
             if stats["n"] == 0:
                 continue
-            per_kp[name].append((stats["mean_px"], stats["n"]))
+            per_role[role].append((stats["mean_px"], stats["n"]))
             if stats.get("mean_norm_pct") is not None:
-                per_kp_norm[name].append((stats["mean_norm_pct"], stats["n"]))
+                per_role_norm[role].append((stats["mean_norm_pct"], stats["n"]))
 
-    combined_kp: Dict[str, dict] = {}
-    for name in KEYPOINT_NAMES:
-        entries = per_kp[name]
-        norm_entries = per_kp_norm[name]
-
+    combined_role: Dict[str, dict] = {}
+    for role in LEG_STEP_LABELS:
+        entries = per_role[role]
+        norm_entries = per_role_norm[role]
         if not entries:
-            combined_kp[name] = {"n": 0}
+            combined_role[role] = {"n": 0}
             continue
-
         n = sum(e[1] for e in entries)
         weighted_mean = sum(e[0] * e[1] for e in entries) / n
-
         norm_mean = None
         if norm_entries:
             n_norm = sum(e[1] for e in norm_entries)
             norm_mean = sum(e[0] * e[1] for e in norm_entries) / n_norm
-
-        combined_kp[name] = {
+        combined_role[role] = {
             "n": n,
             "mean_px": weighted_mean,
             "mean_norm_pct": norm_mean,
@@ -485,13 +536,13 @@ def combine_reports(per_video_reports: List[Tuple[Path, dict]]) -> dict:
     total_n = 0
     total_norm = 0.0
     total_n_norm = 0
-    for name in KEYPOINT_NAMES:
-        s = combined_kp[name]
+    for role in LEG_STEP_LABELS:
+        s = combined_role[role]
         if s["n"] == 0:
             continue
         total_px += s["mean_px"] * s["n"]
         total_n += s["n"]
-        if s["mean_norm_pct"] is not None:
+        if s.get("mean_norm_pct") is not None:
             total_norm += s["mean_norm_pct"] * s["n"]
             total_n_norm += s["n"]
 
@@ -502,43 +553,42 @@ def combine_reports(per_video_reports: List[Tuple[Path, dict]]) -> dict:
             total_norm / total_n_norm if total_n_norm > 0 else None
         )
 
-    contact_reviewed = total_frames_annotated + total_frames_rejected
+    contact_reviewed = total_annotated + total_rejected
     fp_rate = (
-        total_frames_rejected / contact_reviewed
-        if contact_reviewed > 0
-        else None
+        total_rejected / contact_reviewed
+        if contact_reviewed > 0 else None
     )
 
     return {
-        "n_videos": len(per_video_reports),
-        "n_frames_reviewed": total_frames_reviewed,
-        "n_frames_annotated": total_frames_annotated,
-        "n_frames_rejected_non_contact": total_frames_rejected,
-        "n_frames_with_predictions": total_frames_with_predictions,
+        "n_videos": len(per_video),
+        "n_frames_reviewed": total_reviewed,
+        "n_frames_annotated": total_annotated,
+        "n_frames_rejected_non_contact": total_rejected,
+        "leg_counts": leg_counts,
         "contact_classifier": {
             "n_reviewed": contact_reviewed,
-            "n_false_positive": total_frames_rejected,
+            "n_false_positive": total_rejected,
             "false_positive_rate": fp_rate,
         },
         "overall": overall,
-        "per_keypoint": combined_kp,
+        "per_role": combined_role,
     }
 
 
 # ---------------------------------------------------------------------------
-# Report formatting
+# Formatting
 # ---------------------------------------------------------------------------
-def _format_kp_block(report: dict, indent: str = "  ") -> List[str]:
+def _format_role_block(report: dict, indent: str = "  ") -> List[str]:
     lines = []
     header = (
-        f"{indent}{'keypoint':<14}{'n':>5}{'mean (px)':>12}{'% shank':>12}"
+        f"{indent}{'role':<10}{'n':>6}{'mean (px)':>12}{'% shank':>12}"
     )
     lines.append(header)
     lines.append(indent + "-" * (len(header) - len(indent)))
-    for name in KEYPOINT_NAMES:
-        stats = report["per_keypoint"][name]
+    for role in LEG_STEP_LABELS:
+        stats = report["per_role"][role]
         if stats["n"] == 0:
-            lines.append(f"{indent}{name:<14}{0:>5}{'-':>12}{'-':>12}")
+            lines.append(f"{indent}{role:<10}{0:>6}{'-':>12}{'-':>12}")
             continue
         norm_str = (
             f"{stats['mean_norm_pct']:.2f}"
@@ -546,7 +596,7 @@ def _format_kp_block(report: dict, indent: str = "  ") -> List[str]:
             else "-"
         )
         lines.append(
-            f"{indent}{name:<14}{stats['n']:>5}"
+            f"{indent}{role:<10}{stats['n']:>6}"
             f"{stats['mean_px']:>12.2f}{norm_str:>12}"
         )
     return lines
@@ -557,19 +607,18 @@ def _format_classifier_block(report: dict, indent: str = "  ") -> List[str]:
     n = c.get("n_reviewed", 0)
     fp = c.get("n_false_positive", 0)
     rate = c.get("false_positive_rate")
-    lines = []
     if n == 0:
-        lines.append(f"{indent}(No classifier data — no frames reviewed)")
-        return lines
-    lines.append(
-        f"{indent}Contact frames reviewed:  {n}"
-    )
-    lines.append(
-        f"{indent}Marked not-real-contact:  {fp} "
-        f"(false-positive rate {rate * 100:.1f}%)"
-        if rate is not None else f"{indent}Marked not-real-contact:  {fp}"
-    )
-    return lines
+        return [f"{indent}(No classifier data — no frames reviewed)"]
+    if rate is not None:
+        return [
+            f"{indent}Contact frames reviewed:  {n}",
+            f"{indent}Marked not-real-contact:  {fp} "
+            f"(false-positive rate {rate * 100:.1f}%)",
+        ]
+    return [
+        f"{indent}Contact frames reviewed:  {n}",
+        f"{indent}Marked not-real-contact:  {fp}",
+    ]
 
 
 def format_per_video_report(report: dict, video_path: Path) -> str:
@@ -580,6 +629,12 @@ def format_per_video_report(report: dict, video_path: Path) -> str:
         f"annotated: {report['n_frames_annotated']}  "
         f"rejected: {report.get('n_frames_rejected_non_contact', 0)}"
     )
+    leg = report.get("leg_counts", {})
+    if leg:
+        lines.append(
+            f"Stance-leg split:  left={leg.get('left', 0)}, "
+            f"right={leg.get('right', 0)}"
+        )
     lines.append("")
 
     lines.append("Contact classifier")
@@ -588,10 +643,10 @@ def format_per_video_report(report: dict, video_path: Path) -> str:
 
     overall = report["overall"]
     if overall["n"] == 0:
-        lines.append("No comparable points for keypoint accuracy.")
+        lines.append("No comparable points for stance-leg keypoints.")
         return "\n".join(lines)
 
-    lines.append("Keypoint accuracy")
+    lines.append("Stance-leg keypoint accuracy")
     lines.append(
         f"  Mean pixel error:         {overall['mean_px']:.2f} px"
     )
@@ -601,16 +656,15 @@ def format_per_video_report(report: dict, video_path: Path) -> str:
             f"{overall['mean_norm_pct']:.2f}% of shank"
         )
     lines.append("")
-    lines.extend(_format_kp_block(report))
+    lines.extend(_format_role_block(report))
     return "\n".join(lines)
 
 
 def format_combined_report(
-    combined: dict,
-    per_video_reports: List[Tuple[Path, dict]],
+    combined: dict, per_video: List[Tuple[Path, dict]]
 ) -> str:
     lines = []
-    lines.append("========== MODEL EVALUATION ==========")
+    lines.append("========== STANCE-LEG MODEL EVALUATION ==========")
     lines.append(f"Videos evaluated:         {combined['n_videos']}")
     lines.append(
         f"Total frames reviewed:    {combined.get('n_frames_reviewed', '?')}"
@@ -620,6 +674,11 @@ def format_combined_report(
         f"Frames marked not-contact: "
         f"{combined.get('n_frames_rejected_non_contact', 0)}"
     )
+    leg = combined.get("leg_counts", {})
+    lines.append(
+        f"Stance-leg split:         left={leg.get('left', 0)}, "
+        f"right={leg.get('right', 0)}"
+    )
     lines.append("")
 
     lines.append("Contact classifier (across all videos)")
@@ -628,9 +687,9 @@ def format_combined_report(
 
     overall = combined["overall"]
     if overall["n"] == 0:
-        lines.append("No comparable points across any video yet.")
+        lines.append("No stance-leg keypoint data across any video yet.")
     else:
-        lines.append("Keypoint accuracy (across all videos)")
+        lines.append("Stance-leg keypoint accuracy (across all videos)")
         lines.append(
             f"  Mean pixel error:         {overall['mean_px']:.2f} px"
         )
@@ -640,30 +699,29 @@ def format_combined_report(
                 f"{overall['mean_norm_pct']:.2f}% of shank"
             )
         lines.append("")
-
-        lines.append("Per keypoint (across all videos)")
-        lines.extend(_format_kp_block(combined))
+        lines.append("Per role (across all videos)")
+        lines.extend(_format_role_block(combined))
         lines.append("")
 
         scored = [
-            (name, s["mean_px"])
-            for name, s in combined["per_keypoint"].items()
+            (role, s["mean_px"])
+            for role, s in combined["per_role"].items()
             if s["n"] > 0
         ]
         if scored:
             best = min(scored, key=lambda pair: pair[1])
             worst = max(scored, key=lambda pair: pair[1])
             lines.append(
-                f"Best-tracked keypoint:   {best[0]} ({best[1]:.2f} px)"
+                f"Best-tracked role:   {best[0]} ({best[1]:.2f} px)"
             )
             lines.append(
-                f"Worst-tracked keypoint:  {worst[0]} ({worst[1]:.2f} px)"
+                f"Worst-tracked role:  {worst[0]} ({worst[1]:.2f} px)"
             )
         lines.append("")
 
     lines.append("========== PER-VIDEO BREAKDOWN ==========")
     lines.append("")
-    for video_path, r in per_video_reports:
+    for video_path, r in per_video:
         lines.append(format_per_video_report(r, video_path))
         lines.append("")
 
@@ -679,39 +737,30 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--videos-dir",
-        type=Path,
-        default=None,
+        "--videos-dir", type=Path, default=None,
         help="Folder containing test videos. Default: scripts/test_videos/",
     )
     parser.add_argument(
-        "--video",
-        type=Path,
-        default=None,
+        "--video", type=Path, default=None,
         help="Single video to evaluate (overrides --videos-dir).",
     )
     parser.add_argument(
-        "--max-frames-per-video",
-        type=int,
-        default=30,
+        "--max-frames-per-video", type=int, default=30,
         help="Max frames to review per video (default: 30). 0 = no cap.",
     )
     parser.add_argument(
-        "--report-only",
-        action="store_true",
+        "--report-only", action="store_true",
         help="Skip pipeline + click UI. Recompute reports from prior sessions.",
     )
     parser.add_argument(
-        "--redo",
-        action="store_true",
+        "--redo", action="store_true",
         help="Re-annotate every frame, even ones already annotated.",
     )
     return parser.parse_args()
 
 
 def evaluate_one_video(
-    video_path: Path,
-    args: argparse.Namespace,
+    video_path: Path, args: argparse.Namespace,
 ) -> Optional[Tuple[Path, dict]]:
     print()
     print("=" * 60)
@@ -746,24 +795,16 @@ def evaluate_one_video(
         images = images[: args.max_frames_per_video]
         print(f"Reviewing up to {len(images)} frame(s).")
 
-    annotations_path = session_dir / "keypoint_eval_annotations.json"
-    rejections_path = session_dir / "keypoint_eval_rejections.json"
-    annotations = load_annotations(annotations_path)
-    rejections = _load_rejections(rejections_path)
+    records_path = session_dir / "stance_leg_eval_records.json"
+    records = load_frame_records(records_path)
 
     if not args.report_only:
-        run_annotation_session_with_reject(
-            images, annotations, rejections,
-            annotations_path, rejections_path, redo=args.redo,
-        )
+        run_annotation_session(images, records, records_path, redo=args.redo)
 
-    report = compute_mean_report(
-        annotations, rejections, predictions,
-        total_frames_reviewed=len(images),
-    )
+    report = compute_report(records, predictions, len(images))
 
-    per_video_txt = session_dir / "mean_pixel_error_report.txt"
-    per_video_json = session_dir / "mean_pixel_error_report.json"
+    per_video_txt = session_dir / "stance_leg_eval_report.txt"
+    per_video_json = session_dir / "stance_leg_eval_report.json"
     per_video_txt.write_text(format_per_video_report(report, video_path))
     per_video_json.write_text(json.dumps(report, indent=2))
 
@@ -802,13 +843,13 @@ def main() -> int:
 
     combined_dir = OUTPUT_ROOT / "batch_evaluation"
     combined_dir.mkdir(parents=True, exist_ok=True)
-    (combined_dir / "mean_pixel_error_combined.txt").write_text(text)
-    (combined_dir / "mean_pixel_error_combined.json").write_text(
+    (combined_dir / "stance_leg_eval_combined.txt").write_text(text)
+    (combined_dir / "stance_leg_eval_combined.json").write_text(
         json.dumps(combined, indent=2)
     )
     print(
         f"\nSaved combined report to: "
-        f"{combined_dir / 'mean_pixel_error_combined.txt'}"
+        f"{combined_dir / 'stance_leg_eval_combined.txt'}"
     )
 
     # Presentation one-liner
@@ -823,8 +864,8 @@ def main() -> int:
         )
         print(
             f"KEYPOINT MODEL: mean pixel error = {overall['mean_px']:.2f} px"
-            f"{norm_part} across {combined['n_frames_annotated']} annotated "
-            f"frames from {combined['n_videos']} unseen video(s)."
+            f"{norm_part} across {combined['n_frames_annotated']} stance-leg "
+            f"annotations from {combined['n_videos']} unseen video(s)."
         )
     fp_rate = c.get("false_positive_rate")
     if fp_rate is not None:

@@ -1,95 +1,229 @@
-# ====================================================================
-# COMBINED EVALUATION — 4 VIDEO(S)
-# ================================
-#
-# CONTACT MODEL
-# Predicted-contact frames reviewed: 115
-# Actually contact:                  103
-# False positives:                   12
-# False positives among predictions: 10.4%
-# Precision on reviewed positives:   89.6%
-#
-# KEYPOINT DETECTION
-# True-contact frames reviewed:      103
-# Keypoint detection succeeded:      103
-# Keypoint detection failed:         0
-# Detection success rate:            100.0%
-#
-# Stance-leg split: left=48, right=55
-#
-# STANCE-LEG KEYPOINT ERROR
-# Points compared:                   309
-# Mean pixel error:                  8.43 px
-# Mean normalized error:             3.62% of shank
-#
-# ## Keypoint          n     mean px     % shank
-#
-# knee             103        7.43        3.06
-# ankle            103        6.18        2.88
-# heel             103       11.68        4.91
-#
-# ====================================================================
-# PER-VIDEO RESULTS
-# =================
-#
-# Video 1
-# Contact precision:                 96.6%
-# False positives:                   1 / 29 (3.4%)
-# Keypoint detection success:        28 / 28 (100.0%)
-# Mean normalized keypoint error:    2.33% of shank
-#
-# Video 2
-# Contact precision:                 85.2%
-# False positives:                   4 / 27 (14.8%)
-# Keypoint detection success:        23 / 23 (100.0%)
-# Mean normalized keypoint error:    2.77% of shank
-#
-# Video 3
-# Contact precision:                 100.0%
-# False positives:                   0 / 30 (0.0%)
-# Keypoint detection success:        30 / 30 (100.0%)
-# Mean normalized keypoint error:    3.64% of shank
-#
-# Video 4
-# Contact precision:                 75.9%
-# False positives:                   7 / 29 (24.1%)
-# Keypoint detection success:        22 / 22 (100.0%)
-# Mean normalized keypoint error:    6.12% of shank
-#
-# ====================================================================
-# SUMMARY
-# =======
-#
-# The contact model achieved 89.6% precision across the four test videos.
-# Out of 115 frames predicted as contact, 103 were manually confirmed as
-# true contact and 12 were false positives.
-#
-# The keypoint model successfully detected keypoints in all 103 manually
-# confirmed contact frames, giving a 100.0% detection success rate.
-#
-# Across 309 manually evaluated stance-leg keypoints, the average
-# localization error was 8.43 pixels, corresponding to 3.62% of shank
-# length.
-#
-# The ankle was the most accurately localized keypoint at 2.88% of shank
-# length, followed by the knee at 3.06%. The heel had the highest error
-# at 4.91%, indicating that heel localization is currently the weakest
-# part of the keypoint model.
-#
-# Performance varied between videos. Contact precision ranged from 75.9%
-# to 100.0%, while normalized keypoint error ranged from 2.33% to 6.12%.
-# This suggests that recording conditions or differences between runners
-# can affect model performance.
-#
-# Overall, the keypoint detector was highly reliable at producing
-# detections, while the main areas for improvement are reducing false
-# contact detections and improving heel localization.
-#
-# NOTE:
-# The shank is the lower-leg segment between the knee and the ankle.
-# Using shank length to normalize the keypoint error makes the metric less
-# dependent on camera distance, image resolution, or the apparent size of
-# the runner in the frame. For example, an error of 3.62% of shank means
-# that the predicted keypoint was, on average, off by 3.62% of the
-# knee-to-ankle distance in the image.
-# the
+====================================================================
+COMBINED EVALUATION — 4 VIDEO(S)
+================================
+
+CONTACT MODEL
+Predicted-contact frames reviewed: 115
+Actually contact:                  103
+False positives:                   12
+False positives among predictions: 10.4%
+Precision on reviewed positives:   89.6%
+
+KEYPOINT DETECTION
+True-contact frames reviewed:      103
+Keypoint detection succeeded:      103
+Keypoint detection failed:         0
+Detection success rate:            100.0%
+
+Stance-leg split: left=48, right=55
+
+STANCE-LEG KEYPOINT ERROR
+Points compared:                   309
+Mean pixel error:                  8.43 px
+Mean normalized error:             3.62% of shank
+
+## Keypoint          n     mean px     % shank
+
+knee             103        7.43        3.06
+ankle            103        6.18        2.88
+heel             103       11.68        4.91
+
+====================================================================
+PER-VIDEO RESULTS
+=================
+
+Video 1
+Contact precision:                 96.6%
+False positives:                   1 / 29 (3.4%)
+Keypoint detection success:        28 / 28 (100.0%)
+Mean normalized keypoint error:    2.33% of shank
+
+Video 2
+Contact precision:                 85.2%
+False positives:                   4 / 27 (14.8%)
+Keypoint detection success:        23 / 23 (100.0%)
+Mean normalized keypoint error:    2.77% of shank
+
+Video 3
+Contact precision:                 100.0%
+False positives:                   0 / 30 (0.0%)
+Keypoint detection success:        30 / 30 (100.0%)
+Mean normalized keypoint error:    3.64% of shank
+
+Video 4
+Contact precision:                 75.9%
+False positives:                   7 / 29 (24.1%)
+Keypoint detection success:        22 / 22 (100.0%)
+Mean normalized keypoint error:    6.12% of shank
+
+====================================================================
+SUMMARY
+=======
+
+The contact model achieved 89.6% precision across the four test videos.
+Out of 115 frames predicted as contact, 103 were manually confirmed as
+true contact and 12 were false positives.
+
+The keypoint model successfully detected keypoints in all 103 manually
+confirmed contact frames, giving a 100.0% detection success rate.
+
+Across 309 manually evaluated stance-leg keypoints, the average
+localization error was 8.43 pixels, corresponding to 3.62% of shank
+length.
+
+The ankle was the most accurately localized keypoint at 2.88% of shank
+length, followed by the knee at 3.06%. The heel had the highest error
+at 4.91%, indicating that heel localization is currently the weakest
+part of the keypoint model.
+
+Performance varied between videos. Contact precision ranged from 75.9%
+to 100.0%, while normalized keypoint error ranged from 2.33% to 6.12%.
+This suggests that recording conditions or differences between runners
+can affect model performance.
+
+Overall, the keypoint detector was highly reliable at producing
+detections, while the main areas for improvement are reducing false
+contact detections and improving heel localization.
+
+NOTE:
+The shank is the lower-leg segment between the knee and the ankle.
+Using shank length to normalize the keypoint error makes the metric less
+dependent on camera distance, image resolution, or the apparent size of
+the runner in the frame. For example, an error of 3.62% of shank means
+that the predicted keypoint was, on average, off by 3.62% of the
+knee-to-ankle distance in the image.
+the
+
+
+========================================================================
+MEDIAPIPE BASELINE EVALUATION — 4 VIDEO(S)
+========================================================================
+
+CONTACT MODEL — SAME PROJECT MODEL
+Predicted-contact frames reviewed: 106
+Actually contact:                  101
+False positives:                   5
+False-positive percentage:         4.7%
+Precision on reviewed positives:   95.3%
+
+MEDIAPIPE KEYPOINT DETECTION
+True-contact frames reviewed:      101
+MediaPipe detection succeeded:     22
+MediaPipe detection failed:        79
+Detection success rate:            21.8%
+
+STANCE-LEG KEYPOINT ERROR — MEDIAPIPE
+Total evaluated keypoints:         66
+Mean pixel error:                  65.12 px
+Mean normalized error:             39.57% of shank
+
+Keypoint          n     mean px     % shank
+------------------------------------------------
+knee             22          -       30.79
+ankle            22          -       38.98
+heel             22          -       48.93
+
+
+========================================================================
+PER-VIDEO RESULTS
+========================================================================
+
+test_vid_1.mp4
+------------------------------------------------------------------------
+True-contact frames reviewed:      19
+MediaPipe detection succeeded:     15
+MediaPipe detection failed:        4
+Detection success rate:            78.9%
+
+Mean pixel error:                  43.49 px
+Mean normalized error:             44.22% of shank
+
+Keypoint          n     mean px     % shank
+------------------------------------------------
+knee             15       34.47       35.02
+ankle            15       43.39       44.59
+heel             15       52.60       53.05
+
+
+test_vid_2.mp4
+------------------------------------------------------------------------
+True-contact frames reviewed:      29
+MediaPipe detection succeeded:     1
+MediaPipe detection failed:        28
+Detection success rate:            3.4%
+
+Mean pixel error:                  99.89 px
+Mean normalized error:             33.38% of shank
+
+Keypoint          n     mean px     % shank
+------------------------------------------------
+knee              1      124.42       41.58
+ankle             1       79.26       26.49
+heel              1       95.98       32.07
+
+
+test_vid_3.mp4
+------------------------------------------------------------------------
+True-contact frames reviewed:      30
+MediaPipe detection succeeded:     0
+MediaPipe detection failed:        30
+Detection success rate:            0.0%
+
+Total evaluated keypoints:         0
+Mean pixel error:                  -
+Mean normalized error:             -
+
+Keypoint          n     mean px     % shank
+------------------------------------------------
+knee              0           -           -
+ankle             0           -           -
+heel              0           -           -
+
+
+test_vid_4.MOV
+------------------------------------------------------------------------
+True-contact frames reviewed:      23
+MediaPipe detection succeeded:     6
+MediaPipe detection failed:        17
+Detection success rate:            26.1%
+
+Mean pixel error:                  113.41 px
+Mean normalized error:             28.96% of shank
+
+Keypoint          n     mean px     % shank
+------------------------------------------------
+knee              6       72.33       18.43
+ankle             6      105.80       27.02
+heel              6      162.10       41.44
+
+
+========================================================================
+CUSTOM 6-KEYPOINT MODEL — FINAL EVALUATION
+========================================================================
+
+Mean pixel error:                  8.43 px
+Mean normalized error:             3.62% of shank
+
+Keypoint                  % shank
+---------------------------------
+knee                        3.06
+ankle                       2.88
+heel                        4.91
+
+
+========================================================================
+MEDIAPIPE VS CUSTOM MODEL
+========================================================================
+
+Metric                         MediaPipe        Custom Model
+----------------------------------------------------------------
+Mean pixel error                65.12 px          8.43 px
+Mean normalized error          39.57%             3.62%
+Knee normalized error          30.79%             3.06%
+Ankle normalized error         38.98%             2.88%
+Heel normalized error          48.93%             4.91%
+
+MediaPipe detection success:   22 / 101 = 21.8%
+
+MediaPipe mean normalized localization error was approximately
+10.9 times larger than the custom six-keypoint model.

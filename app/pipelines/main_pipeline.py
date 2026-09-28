@@ -254,6 +254,10 @@ def run_pipeline(
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video: {video_path}")
+    # Phone-recorded videos (e.g. iPhone) store rotation in container metadata
+    # rather than in the pixel data; without this, OpenCV returns unrotated
+    # frames that come out sideways relative to how the video actually plays.
+    cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1)
 
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)

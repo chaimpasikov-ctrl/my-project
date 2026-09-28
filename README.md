@@ -177,6 +177,7 @@ Clone the repository:
 ```bash
 git clone https://github.com/chaimpasikov-ctrl/my-project.git
 cd my-project
+```
 
 Create a Python virtual environment:
 

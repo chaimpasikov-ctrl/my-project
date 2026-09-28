@@ -1,5 +1,6 @@
 # 💡 Gait Analysis
 
+![Uploading ChatGPT Image Sep 28, 2026, 09_28_59 PM.png…]()
 A computer-vision system for estimating rearfoot motion from a short rear-view treadmill video recorded with a standard smartphone.
 
 This project was developed as part of course 67547 - Engineering Project and Workshops II at the Hebrew University of Jerusalem.

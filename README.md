@@ -177,3 +177,94 @@ Clone the repository:
 ```bash
 git clone https://github.com/chaimpasikov-ctrl/my-project.git
 cd my-project
+
+Create a Python virtual environment:
+
+```bash
+python3 -m venv .venv
+```
+
+Activate the environment:
+
+```bash
+source .venv/bin/activate
+```
+
+Install the required packages:
+
+```bash
+pip install -r requirements.txt
+```
+
+Create the environment configuration file:
+
+```bash
+cp .env.example .env
+```
+
+Add your Roboflow API key to `.env`:
+
+```text
+ROBOFLOW_API_KEY=your_api_key_here
+```
+
+Run the Streamlit application:
+
+```bash
+streamlit run app/ui/streamlit_app.py
+```
+
+Streamlit will provide a local URL that can be opened in a web browser.
+
+The user can then upload a rear-view treadmill video and run the complete gait-analysis pipeline.
+
+## 🧪 Testing
+
+The project includes evaluation scripts for testing contact detection and lower-limb keypoint localization on unseen videos.
+
+The main video-level evaluation script is:
+
+```text
+scripts/evaluate_on_video.py
+```
+
+The evaluation process includes:
+
+- manually reviewing predicted contact frames
+- identifying false-positive contact predictions
+- manually marking knee, ankle, and heel ground-truth positions
+- calculating Euclidean keypoint localization error
+- normalizing localization error by shank length
+- comparing the custom keypoint model with a MediaPipe baseline
+
+The final evaluation was performed on four runner videos that were excluded from model training.
+
+## 🚀 Deployment
+
+The application currently runs locally using Streamlit.
+
+Model inference is performed remotely through Roboflow, so running the application requires:
+
+- Internet access
+- a valid Roboflow API key
+- the Python dependencies listed in `requirements.txt`
+
+The current implementation is intended as an engineering prototype rather than a production deployment.
+
+## ⚙️ Built With
+
+- [Python](https://www.python.org/) - Main programming language
+- [OpenCV](https://opencv.org/) - Video decoding and frame processing
+- [Roboflow](https://roboflow.com/) - Dataset management, model training, workflows, and cloud inference
+- [RF-DETR](https://rfdetr.roboflow.com/) - Lower-limb keypoint detection
+- [Streamlit](https://streamlit.io/) - Web-based user interface
+- [NumPy](https://numpy.org/) - Numerical processing
+- [pandas](https://pandas.pydata.org/) - Data handling
+- [python-dotenv](https://pypi.org/project/python-dotenv/) - Environment and API-key configuration
+
+## 🙏 Acknowledgments
+
+- Nir Sweed - Project advisor and mentor
+- The Hebrew University of Jerusalem
+- The Rachel and Selim Benin School of Computer Science and Engineering
+- Course 67547 - Engineering Project and Workshops II

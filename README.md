@@ -1,5 +1,3 @@
-# 💡 Gait Analysis
-
 <p align="center">
   <img src="images/gait_analysis_cover.png" alt="Gait Analysis Cover" width="900">
 </p> 
